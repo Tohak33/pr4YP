@@ -30,7 +30,16 @@ function checkPassword(password, stored) {
     : crypto.createHash('sha256').update(salt + password).digest('hex');
   return hash.length === candidate.length && crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(candidate));
 }
-const validName = name => typeof name === 'string' && /^(?:[А-ЯЁ][а-яё]{1,30}|[A-Z][a-z]{1,30})(?:[ -](?:[А-ЯЁ][а-яё]{1,30}|[A-Z][a-z]{1,30})){1,2}$/.test(name.trim());
+// Проверка формы ФИО отсекает очевидный набор букв; подлинность имени требует проверки личности.
+const validName = name => {
+  if (typeof name !== 'string') return false;
+  const value = name.trim();
+  if (!/^(?:[А-ЯЁ][а-яё]{1,30}|[A-Z][a-z]{1,30})(?:[ -](?:[А-ЯЁ][а-яё]{1,30}|[A-Z][a-z]{1,30})){1,2}$/.test(value)) return false;
+  if (/([А-ЯЁA-Z])\1\1|йцу|фыв|ячс|qwe|asd|zxc/iu.test(value)) return false;
+  return value.split(/[ -]/).every(part => /[А-ЯЁ]/iu.test(part)
+    ? !/^[ЫЪЬ]/iu.test(part) && /[АЕЁИОУЫЭЮЯ]/iu.test(part) && /[БВГДЖЗЙКЛМНПРСТФХЦЧШЩ]/iu.test(part)
+    : /[AEIOUY]/iu.test(part) && /[BCDFGHJKLMNPQRSTVWXZ]/iu.test(part));
+};
 const validEmail = email => typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 const validPhone = phone => typeof phone === 'string' && /^\+7 \(\d{3}\) \d{3}-\d{2}-\d{2}$/.test(phone);
 const publicUser = row => ({ name: row.name, email: row.email, phone: row.phone || '', address: row.address || '', role: row.role });
@@ -248,7 +257,7 @@ app.put('/api/cart/:code', authenticate, customer, safe(async (req, res) => {
   res.json((await pool.query(cartQuery, [req.user.id])).rows);
 }));
 
-const profanity = /(?:хуй|хуя|хуе|хуи|оху|пизд|пидор|заеб|наеб|уеб|выеб|проеб|(?:^|[^\p{L}])(?:еба|ёба|бля|сука|сучк|мудак|fuck|shit|bitch)[\p{L}]*)/iu;
+const profanity = /(?:хуй|хуя|хуе|хуи|оху|пизд|пидор|заеб|наеб|уеб|выеб|проеб|долбо[её]б|(?:^|[^\p{L}])(?:еба|ёба|ебл|ёбл|еби|ёби|ебу|ёбу|ебн|ёбн|бля|сука|сучк|мудак|fuck|shit|bitch)[\p{L}]*)/iu;
 app.get('/api/services/:code/reviews', safe(async (req, res) => {
   const result = await pool.query(`SELECT u.name,r.rating,r.created_at,r.deleted_by_admin,
     CASE WHEN r.deleted_by_admin THEN 'Удалено администратором за нарушение политики' ELSE r.comment END AS comment

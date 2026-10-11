@@ -1,4 +1,13 @@
-export const validName = value => /^(?:[А-ЯЁ][а-яё]{1,30}|[A-Z][a-z]{1,30})(?:[ -](?:[А-ЯЁ][а-яё]{1,30}|[A-Z][a-z]{1,30})){1,2}$/.test(value.trim());
+// Проверяем форму ФИО и очевидный набор букв; реальность имени без документов не установить.
+export const validName = value => {
+  if (typeof value !== 'string') return false;
+  const name = value.trim();
+  if (!/^(?:[А-ЯЁ][а-яё]{1,30}|[A-Z][a-z]{1,30})(?:[ -](?:[А-ЯЁ][а-яё]{1,30}|[A-Z][a-z]{1,30})){1,2}$/.test(name)) return false;
+  if (/([А-ЯЁA-Z])\1\1|йцу|фыв|ячс|qwe|asd|zxc/iu.test(name)) return false;
+  return name.split(/[ -]/).every(part => /[А-ЯЁ]/iu.test(part)
+    ? !/^[ЫЪЬ]/iu.test(part) && /[АЕЁИОУЫЭЮЯ]/iu.test(part) && /[БВГДЖЗЙКЛМНПРСТФХЦЧШЩ]/iu.test(part)
+    : /[AEIOUY]/iu.test(part) && /[BCDFGHJKLMNPQRSTVWXZ]/iu.test(part));
+};
 export const validPhone = value => /^\+7 \(\d{3}\) \d{3}-\d{2}-\d{2}$/.test(value);
 // Маска показывает конкретный российский формат и не допускает более десяти цифр.
 export function formatPhone(input) {
