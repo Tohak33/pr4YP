@@ -17,7 +17,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 const MAX_QUANTITY = 10;
-const legacyCategories = ['Смартфоны', 'Наушники'];
 const tokenHash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const fail = (res, status, error) => res.status(status).json({ error });
 const safe = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -287,7 +286,11 @@ app.get(
   '/api/categories',
   safe(async (_req, res) => {
     const result = await pool.query(
-      `SELECT c.name FROM categories c WHERE c.name NOT IN ('Смартфоны','Наушники') ORDER BY c.name`
+      `SELECT c.name FROM categories c
+       LEFT JOIN services s ON s.category_id=c.id
+       GROUP BY c.id
+       HAVING COUNT(s.id)=0 OR BOOL_OR(s.code LIKE 'FUR-%')
+       ORDER BY c.name`
     );
     res.json(result.rows);
   })
@@ -300,8 +303,6 @@ app.post(
     const name = String(req.body.name || '').trim();
     if (name.length < 2 || name.length > 60)
       return fail(res, 400, 'Название категории: от 2 до 60 символов');
-    if (legacyCategories.includes(name))
-      return fail(res, 400, 'Название зарезервировано для прежнего каталога');
     try {
       const result = await pool.query('INSERT INTO categories(name) VALUES($1) RETURNING name', [
         name
@@ -320,13 +321,9 @@ app.put(
   safe(async (req, res) => {
     if (req.params.name === 'Без категории')
       return fail(res, 400, 'Нейтральную категорию нельзя переименовать');
-    if (legacyCategories.includes(req.params.name))
-      return fail(res, 403, 'Эта категория не относится к мебели');
     const name = String(req.body.name || '').trim();
     if (name.length < 2 || name.length > 60)
       return fail(res, 400, 'Название категории: от 2 до 60 символов');
-    if (legacyCategories.includes(name))
-      return fail(res, 400, 'Название зарезервировано для прежнего каталога');
     try {
       const result = await pool.query(
         'UPDATE categories SET name=$1 WHERE name=$2 RETURNING name',
@@ -347,8 +344,6 @@ app.delete(
   safe(async (req, res) => {
     const name = req.params.name;
     if (name === 'Без категории') return fail(res, 400, 'Эту категорию нельзя удалить');
-    if (legacyCategories.includes(name))
-      return fail(res, 403, 'Эта категория не относится к мебели');
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -423,7 +418,7 @@ app.post(
       const result = await pool.query(
         `INSERT INTO services(code,category_id,name,description,duration,price,discount_percent,image,active)
       SELECT $1,c.id,$2,$3,$4,$5,$6,$7,true FROM categories c
-      WHERE c.name=$8 AND c.name NOT IN ('Смартфоны','Наушники') RETURNING code`,
+      WHERE c.name=$8 RETURNING code`,
         [
           code,
           name.trim(),
@@ -469,7 +464,7 @@ app.put(
     const result = await pool.query(
       `UPDATE services s SET name=$1,description=$2,duration=$3,price=$4,image=$5,
     discount_percent=$6,category_id=c.id FROM categories c WHERE s.code=$7 AND c.name=$8
-      AND c.name NOT IN ('Смартфоны','Наушники') AND s.code LIKE 'FUR-%' RETURNING s.code`,
+      AND s.code LIKE 'FUR-%' RETURNING s.code`,
       [
         name.trim(),
         description.trim(),
@@ -927,7 +922,6 @@ app.put(
       }
       const allowed = {
         'Ожидает оплаты': ['Оплачено', 'Отменён'],
-        Оформлен: ['Оплачено', 'Отменён'],
         Оплачено: ['В доставке'],
         'В доставке': ['Доставлено'],
         Доставлено: [],
