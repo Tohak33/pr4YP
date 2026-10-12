@@ -1,4 +1,3 @@
-// Проверяем форму ФИО и очевидный набор букв; реальность имени без документов не установить.
 export const validName = (value) => {
   if (typeof value !== 'string') return false;
   const name = value.trim();
@@ -20,7 +19,6 @@ export const validName = (value) => {
     );
 };
 export const validPhone = (value) => /^\+7 \(\d{3}\) \d{3}-\d{2}-\d{2}$/.test(value);
-// Маска показывает конкретный российский формат и не допускает более десяти цифр.
 export function formatPhone(input) {
   let digits = input.replace(/\D/g, '');
   if (digits.startsWith('7') || digits.startsWith('8')) digits = digits.slice(1);

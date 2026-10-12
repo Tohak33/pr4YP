@@ -1,4 +1,3 @@
-// «Мебельный магазин»: API. Все права и ограничения проверяются на сервере.
 const crypto = require('crypto');
 const dns = require('node:dns').promises;
 const express = require('express');
@@ -43,7 +42,6 @@ function checkPassword(password, stored) {
     crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(candidate))
   );
 }
-// Проверка формы ФИО отсекает очевидный набор букв; подлинность имени требует проверки личности.
 const validName = (name) => {
   if (typeof name !== 'string') return false;
   const value = name.trim();
@@ -76,7 +74,6 @@ const publicUser = (row) => ({
   role: row.role
 });
 
-// Сессия живёт 30 дней, поэтому прямые ссылки и новые вкладки сохраняют вход.
 async function issueSession(client, row) {
   const token = crypto.randomBytes(32).toString('hex');
   await client.query(
@@ -202,7 +199,6 @@ app.put(
   })
 );
 
-// Код генерируется заново и хранится только в виде хэша; письма отправляет SMTP.
 app.post(
   '/api/auth/forgot',
   safe(async (req, res) => {
@@ -221,7 +217,6 @@ app.post(
         ON CONFLICT(user_id) DO UPDATE SET code_hash=EXCLUDED.code_hash,expires_at=EXCLUDED.expires_at`,
           [result.rows[0].id, tokenHash(code)]
         );
-        // Не заменяем прежний рабочий код, если SMTP не смог отправить новое письмо.
         const smtpHost = process.env.SMTP_HOST;
         const { address } = await dns.lookup(smtpHost, { family: 4 });
         const transport = nodemailer.createTransport({
@@ -518,7 +513,6 @@ app.delete(
   })
 );
 
-// Корзина хранится в БД и выбирается только по пользователю из проверенной сессии.
 const cartQuery = `SELECT s.code,s.name,s.price,s.discount_percent,s.image AS image_url,c.name AS category,ci.quantity
   FROM cart_items ci JOIN services s ON s.id=ci.service_id JOIN categories c ON c.id=s.category_id
   WHERE ci.user_id=$1 AND s.code LIKE 'FUR-%' AND s.active=true AND s.price>0 ORDER BY s.name`;
@@ -585,7 +579,6 @@ app.put(
   })
 );
 
-// Добавление увеличивает число на сервере и не перезаписывает корзину из другой вкладки.
 app.post(
   '/api/cart/:code',
   authenticate,
@@ -749,7 +742,6 @@ app.get(
   })
 );
 
-// Один заказ объединяет все позиции; дневной лимит 10 единиц относится ко всем категориям.
 app.post(
   '/api/orders',
   authenticate,

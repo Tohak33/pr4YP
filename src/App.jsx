@@ -1,4 +1,3 @@
-// «Мебельный магазин»: корневые маршруты и экран технических работ.
 import { useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { api } from './api';

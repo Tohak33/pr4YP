@@ -4,7 +4,6 @@ import { AuthContext, CartContext, MAX_QUANTITY } from './contexts';
 import { api } from './api';
 import ReceiptModal from './ReceiptModal';
 
-// Маршрут корзины ждёт восстановления сессии перед проверкой доступа.
 export default function Cart() {
   const { user, ready } = useContext(AuthContext);
   if (!ready) return <div className="info-message">Загрузка корзины...</div>;
@@ -13,7 +12,6 @@ export default function Cart() {
   return <CartContent key={user.email} user={user} />;
 }
 
-// Оформление отправляет адрес и дату, а итоговую сумму считает сервер.
 function CartContent({ user }) {
   const {
     cartItems,

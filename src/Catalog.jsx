@@ -5,7 +5,6 @@ import { api } from './api';
 import CategoryAside from './CategoryAside';
 import ProductCard from './ProductCard';
 
-// Каталог фильтруется при каждом вводе символа, без отдельной кнопки поиска.
 export default function Catalog() {
   const { user } = useContext(AuthContext);
   const { addToCart, loading: cartLoading, updating: cartUpdating } = useContext(CartContext);

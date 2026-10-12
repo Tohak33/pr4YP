@@ -4,7 +4,6 @@ import { api } from './api';
 import { AuthContext } from './contexts';
 import { formatPhone, validName, validPhone } from './validation';
 
-// Регистрация собирает ФИО и телефон в явном формате.
 export default function Register() {
   const { login } = useContext(AuthContext);
   const navigate = useNavigate();

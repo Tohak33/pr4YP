@@ -4,7 +4,6 @@ import { AuthContext } from './contexts';
 import { api } from './api';
 import { formatPhone, validName, validPhone } from './validation';
 
-// Профиль доступен после проверки сессии; администратору скрыты адрес и личные заказы.
 export default function Profile() {
   const { user, ready } = useContext(AuthContext);
   if (!ready) return <div className="info-message">Загрузка профиля...</div>;

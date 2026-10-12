@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api } from './api';
 import { AuthContext } from './contexts';
 
-// Форма входа проверяет обязательные поля и показывает ответ API.
 export default function Login() {
   const { login } = useContext(AuthContext);
   const navigate = useNavigate();

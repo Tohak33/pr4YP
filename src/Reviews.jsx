@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { AuthContext } from './contexts';
 import { api } from './api';
 
-// Отзывы видны всем; после оплаты право оставить один отзыв проверяет API.
 export default function Reviews({ code }) {
   const { user } = useContext(AuthContext);
   const isCustomer = Boolean(user && user.role !== 'admin');

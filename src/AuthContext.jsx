@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { api, getToken, setToken } from './api';
 import { AuthContext } from './contexts';
 
-// Восстанавливает сессию по токену после обновления страницы и в новой вкладке.
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(!getToken());
@@ -52,7 +51,6 @@ export function AuthProvider({ children }) {
     try {
       await api('/auth/logout', { method: 'POST' });
     } catch {
-      /* Локальный выход всё равно обязателен. */
     }
     setToken(null);
     setUser(null);

@@ -1,4 +1,3 @@
-// Все запросы приложения проходят через единый клиент: токен, ошибки и технические работы.
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 export const getToken = () => localStorage.getItem('furniture_token');
 export const setToken = (token) =>

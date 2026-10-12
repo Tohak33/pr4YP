@@ -2,7 +2,6 @@ import { useContext, useEffect, useRef, useState } from 'react';
 import { AuthContext, CartContext, MAX_QUANTITY } from './contexts';
 import { api } from './api';
 
-// Корзина всегда загружается с сервера для текущей учётной записи.
 export function CartProvider({ children }) {
   const { user, ready } = useContext(AuthContext);
   const email = user?.email;

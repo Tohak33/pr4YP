@@ -19,7 +19,6 @@ const transitions = {
   'В доставке': ['Доставлено']
 };
 
-// Панель меняет мебель, категории, отзывы и статусы. Покупатели и чеки здесь недоступны.
 export default function Admin() {
   const { user, ready } = useContext(AuthContext);
   const [categories, setCategories] = useState([]);
