@@ -27,8 +27,8 @@ a { color: #245a3d; }
 .catalog-aside button { border: 0; background: transparent; text-align: left; padding: 8px; }
 .catalog-aside button.filter-active { background: #e6eee8; font-weight: bold; }
 .catalog-toolbar { display: flex; gap: 10px; margin-bottom: 12px; }
-.search-input, .price-input, .form-inline input, .product-form input, .product-form textarea, .product-form select,
-.form-group input, .form-group textarea, .reviews textarea, .reviews select { padding: 9px; border: 1px solid #bbb; border-radius: 4px; background: white; }
+.search-input, .price-input, .form-inline input, .form-inline select, .product-form input, .product-form textarea, .product-form select,
+.form-group input, .form-group textarea, .form-group select, .reviews textarea, .reviews select { padding: 9px; border: 1px solid #bbb; border-radius: 4px; background: white; }
 .search-input { flex: 1; min-width: 0; width: 100%; }
 .price-input { width: 150px; }
 .results-count { color: #666; font-size: .9rem; }
@@ -77,7 +77,7 @@ a { color: #245a3d; }
 .auth-hint { margin: 12px 0 0; font-size: .9rem; }
 .form-group { margin: 12px 0; }
 .form-group label { display: block; margin-bottom: 5px; }
-.form-group input, .form-group textarea { width: 100%; }
+.form-group input, .form-group textarea, .form-group select { width: 100%; }
 .profile-sections { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(0, 1.5fr); gap: 20px; }
 .order-box { border: 1px solid #ddd; padding: 12px; margin-top: 12px; }
 .order-header { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
@@ -90,12 +90,17 @@ a { color: #245a3d; }
 .admin-section { margin-bottom: 20px; }
 .form-inline { display: flex; gap: 8px; }
 .form-inline input { flex: 1; min-width: 0; }
+.coupon-form { flex-wrap: wrap; margin-bottom: 12px; }
+.coupon-form select { flex: 1; min-width: 220px; }
+.coupon-form input { flex: 0 0 110px; }
 .category-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .category-chips span { border: 1px solid #ddd; padding: 6px; }
 .category-chips button { border: 0; background: transparent; margin-left: 6px; }
 .rename-form { margin-top: 12px; }
 .product-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .product-form label { display: flex; flex-direction: column; gap: 4px; }
+.product-form textarea, .product-form input, .product-form select { width: 100%; min-width: 0; }
+.product-form textarea { resize: vertical; }
 .product-form .wide, .form-actions { grid-column: 1 / -1; }
 .form-actions { display: flex; gap: 8px; }
 .table-wrap { overflow-x: auto; }

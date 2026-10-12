@@ -21,6 +21,7 @@ function ProfileContent({ user }) {
     password: ''
   });
   const [orders, setOrders] = useState([]);
+  const [coupons, setCoupons] = useState([]);
   const [loading, setLoading] = useState(false);
   const [ordersLoading, setOrdersLoading] = useState(user.role !== 'admin');
   const [ordersError, setOrdersError] = useState('');
@@ -28,8 +29,11 @@ function ProfileContent({ user }) {
   const [message, setMessage] = useState('');
   useEffect(() => {
     if (user.role === 'admin') return;
-    api('/orders')
-      .then(setOrders)
+    Promise.all([api('/orders'), api('/coupons')])
+      .then(([purchases, availableCoupons]) => {
+        setOrders(purchases);
+        setCoupons(availableCoupons);
+      })
       .catch((err) => setOrdersError(err.message))
       .finally(() => setOrdersLoading(false));
   }, [user.role]);
@@ -109,9 +113,18 @@ function ProfileContent({ user }) {
         </form>
         {user.role !== 'admin' && (
           <section className="order-history card">
-            <h3>Мои заказы</h3>
-            {ordersLoading && <div className="info-message">Загрузка заказов...</div>}
+            <h3>Мои купоны</h3>
+            {ordersLoading && <div className="info-message">Загрузка данных...</div>}
             {ordersError && <div className="error-message">{ordersError}</div>}
+            {!ordersLoading && !ordersError && !coupons.length && <p>Доступных купонов нет</p>}
+            {!!coupons.length && (
+              <ul>
+                {coupons.map((coupon) => (
+                  <li key={coupon.code}>{coupon.code} — скидка {coupon.discount_percent}% на один заказ</li>
+                ))}
+              </ul>
+            )}
+            <h3>Мои заказы</h3>
             {!ordersLoading && !ordersError && !orders.length && (
               <p className="empty-message">Заказов пока нет</p>
             )}
@@ -141,20 +154,17 @@ function ProfileContent({ user }) {
                     </li>
                   ))}
                 </ul>
-                {Number(order.final_amount) <
-                  order.items.reduce(
-                    (sum, item) => sum + Number(item.unit_price) * item.quantity,
-                    0
-                  ) && (
+                {Number(order.personal_discount_amount) > 0 && (
                   <p>
                     Скидка на первый заказ:{' '}
-                    {(
-                      order.items.reduce(
-                        (sum, item) => sum + Number(item.unit_price) * item.quantity,
-                        0
-                      ) - Number(order.final_amount)
-                    ).toLocaleString('ru-RU')}{' '}
+                    {Number(order.personal_discount_amount).toLocaleString('ru-RU')}{' '}
                     ₽
+                  </p>
+                )}
+                {order.coupon_code && (
+                  <p>
+                    Купон {order.coupon_code} ({order.coupon_discount_percent}%):{' '}
+                    {Number(order.coupon_discount_amount).toLocaleString('ru-RU')} ₽
                   </p>
                 )}
                 <div className="order-footer">

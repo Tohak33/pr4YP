@@ -27,9 +27,19 @@ function CartContent({ user }) {
   const [receipt, setReceipt] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [coupons, setCoupons] = useState([]);
+  const [couponCode, setCouponCode] = useState('');
+  const [couponsLoading, setCouponsLoading] = useState(true);
+  const [couponsError, setCouponsError] = useState('');
   const [minDate, setMinDate] = useState(() =>
     new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' })
   );
+  useEffect(() => {
+    api('/coupons')
+      .then(setCoupons)
+      .catch((err) => setCouponsError(err.message))
+      .finally(() => setCouponsLoading(false));
+  }, []);
   useEffect(() => {
     const refreshDate = () =>
       setMinDate(new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' }));
@@ -60,9 +70,15 @@ function CartContent({ user }) {
     try {
       const data = await api('/orders', {
         method: 'POST',
-        body: JSON.stringify({ delivery_address: address.trim(), delivery_date: date })
+        body: JSON.stringify({
+          delivery_address: address.trim(),
+          delivery_date: date,
+          coupon_code: couponCode || undefined
+        })
       });
       clearCart();
+      if (couponCode) setCoupons((current) => current.filter((coupon) => coupon.code !== couponCode));
+      setCouponCode('');
       setReceipt(data.receipt);
     } catch (err) {
       setError(err.message);
@@ -156,6 +172,19 @@ function CartContent({ user }) {
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
               />
+            </div>
+            <div className="form-group">
+              <label>Персональный купон</label>
+              {couponsLoading && <p>Загрузка купонов...</p>}
+              {couponsError && <p className="error-message">{couponsError}</p>}
+              <select value={couponCode} onChange={(e) => setCouponCode(e.target.value)}>
+                <option value="">Без купона</option>
+                {coupons.map((coupon) => (
+                  <option key={coupon.code} value={coupon.code}>
+                    {coupon.code} — скидка {coupon.discount_percent}%
+                  </option>
+                ))}
+              </select>
             </div>
             <p className="capacity-note">
               На каждый день доступно не более 10 единиц мебели по всем категориям.

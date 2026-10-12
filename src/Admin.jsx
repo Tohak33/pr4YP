@@ -24,6 +24,11 @@ export default function Admin() {
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [reviews, setReviews] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [coupons, setCoupons] = useState([]);
+  const [couponEmail, setCouponEmail] = useState('');
+  const [couponDiscount, setCouponDiscount] = useState('10');
+  const [userSearch, setUserSearch] = useState('');
   const [newCategory, setNewCategory] = useState('');
   const [renameFrom, setRenameFrom] = useState('');
   const [renameTo, setRenameTo] = useState('');
@@ -35,27 +40,40 @@ export default function Admin() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   async function reload() {
-    const [groups, items, purchases, feedback] = await Promise.all([
+    const [groups, items, purchases, feedback, buyers, issuedCoupons] = await Promise.all([
       api('/categories'),
       api('/services'),
       api('/admin/orders'),
-      api('/admin/reviews')
+      api('/admin/reviews'),
+      api('/admin/users'),
+      api('/admin/coupons')
     ]);
     setCategories(groups);
     setProducts(items);
     setOrders(purchases);
     setReviews(feedback);
+    setUsers(buyers);
+    setCoupons(issuedCoupons);
   }
   useEffect(() => {
     if (!ready || user?.role !== 'admin') return;
     let active = true;
-    Promise.all([api('/categories'), api('/services'), api('/admin/orders'), api('/admin/reviews')])
-      .then(([groups, items, purchases, feedback]) => {
+    Promise.all([
+      api('/categories'),
+      api('/services'),
+      api('/admin/orders'),
+      api('/admin/reviews'),
+      api('/admin/users'),
+      api('/admin/coupons')
+    ])
+      .then(([groups, items, purchases, feedback, buyers, issuedCoupons]) => {
         if (active) {
           setCategories(groups);
           setProducts(items);
           setOrders(purchases);
           setReviews(feedback);
+          setUsers(buyers);
+          setCoupons(issuedCoupons);
         }
       })
       .catch((err) => {
@@ -131,13 +149,34 @@ export default function Admin() {
     );
     if (saved) setNewCategory('');
   }
+  async function submitCoupon(event) {
+    event.preventDefault();
+    if (
+      !couponEmail ||
+      !Number.isInteger(Number(couponDiscount)) ||
+      Number(couponDiscount) < 1 ||
+      Number(couponDiscount) > 99
+    )
+      return setError('Выберите покупателя и скидку от 1 до 99%');
+    await run(
+      () =>
+        api('/admin/coupons', {
+          method: 'POST',
+          body: JSON.stringify({ email: couponEmail, discount_percent: Number(couponDiscount) })
+        }),
+      'Персональный купон выдан'
+    );
+  }
   const visible = products.filter((item) =>
     `${item.name} ${item.category}`.toLowerCase().includes(search.toLowerCase())
+  );
+  const visibleUsers = users.filter((item) =>
+    `${item.name} ${item.email}`.toLowerCase().includes(userSearch.toLowerCase())
   );
   return (
     <div className="admin-page">
       <h1>Управление магазином</h1>
-      <p className="admin-intro">Мебель, категории, заказы и модерация отзывов</p>
+      <p className="admin-intro">Мебель, категории, заказы, покупатели и отзывы</p>
       {error && <div className="error-message">{error}</div>}
       {message && <div className="success-message">{message}</div>}
       {loading && <div className="info-message">Загрузка данных...</div>}
@@ -387,6 +426,112 @@ export default function Admin() {
             </tbody>
           </table>
         </div>
+      </section>
+      <section className="admin-section card">
+        <h2>Покупатели и персональные купоны</h2>
+        <form className="form-inline coupon-form" onSubmit={submitCoupon}>
+          <select required value={couponEmail} onChange={(e) => setCouponEmail(e.target.value)}>
+            <option value="">Выберите покупателя</option>
+            {users.map((item) => (
+              <option key={item.email} value={item.email}>
+                {item.name} — {item.email}
+              </option>
+            ))}
+          </select>
+          <input
+            type="number"
+            min="1"
+            max="99"
+            step="1"
+            required
+            aria-label="Скидка по купону в процентах"
+            value={couponDiscount}
+            onChange={(e) => setCouponDiscount(e.target.value)}
+          />
+          <button className="btn-primary" disabled={saving || !users.length}>
+            Выдать купон
+          </button>
+        </form>
+        <input
+          className="search-input"
+          placeholder="Поиск покупателя..."
+          value={userSearch}
+          onChange={(e) => setUserSearch(e.target.value)}
+        />
+        <div className="table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>Покупатель</th>
+                <th>Email</th>
+                <th>Телефон</th>
+                <th>Заказов</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleUsers.map((item) => (
+                <tr key={item.email}>
+                  <td>{item.name}</td>
+                  <td>{item.email}</td>
+                  <td>{item.phone || '—'}</td>
+                  <td>{item.order_count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <h3>Выданные купоны</h3>
+        {!coupons.length && <p>Купонов пока нет</p>}
+        {!!coupons.length && (
+          <div className="table-wrap">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Код</th>
+                  <th>Покупатель</th>
+                  <th>Скидка</th>
+                  <th>Состояние</th>
+                  <th>Действие</th>
+                </tr>
+              </thead>
+              <tbody>
+                {coupons.map((coupon) => (
+                  <tr key={coupon.code}>
+                    <td>{coupon.code}</td>
+                    <td>{coupon.email}</td>
+                    <td>{coupon.discount_percent}%</td>
+                    <td>
+                      {coupon.used_order_number
+                        ? `Использован в ${coupon.used_order_number}`
+                        : coupon.active
+                          ? 'Доступен'
+                          : 'Отозван'}
+                    </td>
+                    <td>
+                      {coupon.active && !coupon.used_order_number && (
+                        <button
+                          className="btn-remove"
+                          disabled={saving}
+                          onClick={() =>
+                            run(
+                              () =>
+                                api(`/admin/coupons/${encodeURIComponent(coupon.code)}`, {
+                                  method: 'DELETE'
+                                }),
+                              'Купон отозван'
+                            )
+                          }
+                        >
+                          Отозвать
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
       <section className="admin-section card">
         <h2>Заказы</h2>

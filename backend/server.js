@@ -844,6 +844,80 @@ app.get(
   })
 );
 
+app.get(
+  '/api/admin/users',
+  authenticate,
+  admin,
+  safe(async (_req, res) => {
+    const result = await pool.query(`SELECT u.name,u.email,u.phone,u.created_at,
+      (SELECT COUNT(*)::int FROM appointments a WHERE a.user_id=u.id
+        AND EXISTS (SELECT 1 FROM appointment_services i JOIN services s ON s.id=i.service_id
+          WHERE i.appointment_id=a.id AND s.code LIKE 'FUR-%')) AS order_count
+      FROM users u JOIN roles r ON r.id=u.role_id WHERE r.name='customer'
+      ORDER BY u.created_at DESC`);
+    res.json(result.rows);
+  })
+);
+app.get(
+  '/api/admin/coupons',
+  authenticate,
+  admin,
+  safe(async (_req, res) => {
+    const result = await pool.query(`SELECT c.code,c.discount_percent,c.active,c.created_at,
+      u.email,u.name,CASE WHEN a.id IS NULL THEN NULL ELSE 'FUR-' || a.id END AS used_order_number
+      FROM coupons c JOIN users u ON u.id=c.user_id
+      LEFT JOIN appointments a ON a.id=c.used_order_id
+      WHERE c.code LIKE 'FUR-P-%' AND c.service_id IS NULL ORDER BY c.created_at DESC`);
+    res.json(result.rows);
+  })
+);
+app.post(
+  '/api/admin/coupons',
+  authenticate,
+  admin,
+  safe(async (req, res) => {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const discount = Number(req.body.discount_percent);
+    if (!validEmail(email) || !Number.isInteger(discount) || discount < 1 || discount > 99)
+      return fail(res, 400, 'Укажите покупателя и скидку целым числом от 1 до 99%');
+    const code = `FUR-P-${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
+    const result = await pool.query(
+      `INSERT INTO coupons(code,discount_percent,user_id,service_id,active)
+      SELECT $1,$2,u.id,NULL,true FROM users u JOIN roles r ON r.id=u.role_id
+      WHERE u.email=$3 AND r.name='customer' RETURNING code,discount_percent`,
+      [code, discount, email]
+    );
+    if (!result.rowCount) return fail(res, 404, 'Покупатель не найден');
+    res.status(201).json(result.rows[0]);
+  })
+);
+app.delete(
+  '/api/admin/coupons/:code',
+  authenticate,
+  admin,
+  safe(async (req, res) => {
+    const result = await pool.query(
+      `UPDATE coupons SET active=false WHERE code=$1 AND code LIKE 'FUR-P-%'
+      AND service_id IS NULL AND active=true AND used_order_id IS NULL RETURNING code`,
+      [req.params.code]
+    );
+    if (!result.rowCount) return fail(res, 409, 'Купон уже использован, отозван или не найден');
+    res.json({ ok: true });
+  })
+);
+app.get(
+  '/api/coupons',
+  authenticate,
+  customer,
+  safe(async (req, res) => {
+    const result = await pool.query(`SELECT c.code,c.discount_percent,c.created_at
+      FROM coupons c JOIN users u ON u.id=c.user_id
+      WHERE u.id=$1 AND c.code LIKE 'FUR-P-%' AND c.service_id IS NULL
+      AND c.active=true AND c.used_order_id IS NULL ORDER BY c.created_at DESC`, [req.user.id]);
+    res.json(result.rows);
+  })
+);
+
 app.post(
   '/api/orders',
   authenticate,
@@ -851,12 +925,15 @@ app.post(
   safe(async (req, res) => {
     const address = String(req.body.delivery_address || '').trim();
     const date = String(req.body.delivery_date || '');
+    const couponCode = String(req.body.coupon_code || '').trim().toUpperCase();
     const validDate =
       /^\d{4}-\d{2}-\d{2}$/.test(date) &&
       !Number.isNaN(Date.parse(date)) &&
       new Date(date).toISOString().slice(0, 10) === date;
     if (!address || address.length > 500 || !validDate || date < today())
       return fail(res, 400, 'Укажите адрес и дату доставки не раньше сегодня');
+    if (couponCode && !/^FUR-P-[A-F0-9]{16}$/.test(couponCode))
+      return fail(res, 400, 'Неверный код купона');
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -897,6 +974,20 @@ app.post(
         [req.user.id]
       );
       const personalDiscount = previous.rowCount ? 0 : 5;
+      let coupon = null;
+      if (couponCode) {
+        const found = await client.query(
+          `SELECT c.code,c.discount_percent FROM coupons c JOIN users u ON u.id=c.user_id
+          WHERE c.code=$1 AND u.id=$2 AND c.active=true AND c.used_order_id IS NULL
+          AND c.service_id IS NULL FOR UPDATE OF c`,
+          [couponCode, req.user.id]
+        );
+        if (!found.rowCount) {
+          await client.query('ROLLBACK');
+          return fail(res, 400, 'Купон недоступен этому покупателю или уже использован');
+        }
+        coupon = found.rows[0];
+      }
       const items = cart.rows.map((item) => ({
         code: item.code,
         name: item.name,
@@ -909,7 +1000,16 @@ app.post(
       }));
       const totalInitial = items.reduce((n, i) => n + i.original_price * i.quantity, 0);
       const discounted = items.reduce((n, i) => n + i.price * i.quantity, 0);
-      const finalAmount = Math.max(1, Math.round(discounted * (1 - personalDiscount / 100)));
+      const afterFirstOrder = Math.max(1, Math.round(discounted * (1 - personalDiscount / 100)));
+      const personalDiscountAmount = discounted - afterFirstOrder;
+      const finalAmount = coupon
+        ? Math.max(1, Math.round(afterFirstOrder * (1 - coupon.discount_percent / 100)))
+        : afterFirstOrder;
+      const couponDiscountAmount = afterFirstOrder - finalAmount;
+      if (coupon && couponDiscountAmount === 0) {
+        await client.query('ROLLBACK');
+        return fail(res, 400, 'Купон не уменьшает сумму заказа');
+      }
       const order = await client.query(
         `INSERT INTO appointments(user_id,status,total,delivery_address,delivery_date)
       VALUES($1,'Оплачено',$2,$3,$4) RETURNING id,created_at`,
@@ -928,6 +1028,12 @@ app.post(
             item.discount_percent
           ]
         );
+      if (coupon)
+        await client.query(
+          `UPDATE coupons SET used_order_id=$1,applied_amount=$2
+          WHERE code=$3 AND user_id=$4 AND active=true AND used_order_id IS NULL`,
+          [order.rows[0].id, couponDiscountAmount, coupon.code, req.user.id]
+        );
       await client.query(
         `INSERT INTO payments(appointment_id,amount,status,provider) VALUES($1,$2,'Оплачено','Оформление заказа')`,
         [order.rows[0].id, finalAmount]
@@ -944,7 +1050,10 @@ app.post(
           total_initial: totalInitial,
           total_with_product_discounts: discounted,
           personal_discount: personalDiscount,
-          personal_discount_amount: discounted - finalAmount,
+          personal_discount_amount: personalDiscountAmount,
+          coupon_code: coupon?.code || null,
+          coupon_discount_percent: coupon?.discount_percent || 0,
+          coupon_discount_amount: couponDiscountAmount,
           total_discount: totalInitial - finalAmount,
           final_amount: finalAmount,
           status: 'Оплачено'
@@ -965,17 +1074,28 @@ app.get(
   safe(async (req, res) => {
     const result = await pool.query(
       `SELECT a.id,a.status,a.total AS final_amount,a.created_at,a.delivery_date::text AS delivery_date,a.delivery_address,
+    coupon.code AS coupon_code,coupon.discount_percent AS coupon_discount_percent,
+    COALESCE(coupon.applied_amount,0) AS coupon_discount_amount,
     COALESCE(json_agg(json_build_object('name',s.name,'code',s.code,'quantity',i.quantity,
       'unit_price',i.unit_price,'original_price',i.original_price,'discount_percent',i.discount_percent))
       FILTER (WHERE s.id IS NOT NULL),'[]') AS items
     FROM appointments a LEFT JOIN appointment_services i ON i.appointment_id=a.id
-    LEFT JOIN services s ON s.id=i.service_id WHERE a.user_id=$1
+    LEFT JOIN services s ON s.id=i.service_id
+    LEFT JOIN coupons coupon ON coupon.used_order_id=a.id AND coupon.code LIKE 'FUR-P-%'
+    WHERE a.user_id=$1
     AND EXISTS (SELECT 1 FROM appointment_services fi JOIN services fs ON fs.id=fi.service_id
       WHERE fi.appointment_id=a.id AND fs.code LIKE 'FUR-%')
-    GROUP BY a.id ORDER BY a.id DESC`,
+    GROUP BY a.id,coupon.code,coupon.discount_percent,coupon.applied_amount ORDER BY a.id DESC`,
       [req.user.id]
     );
-    res.json(result.rows.map(({ id, ...order }) => ({ ...order, order_number: `FUR-${id}` })));
+    res.json(result.rows.map(({ id, ...order }) => ({
+      ...order,
+      order_number: `FUR-${id}`,
+      personal_discount_amount: Math.max(0,
+        order.items.reduce((sum, item) => sum + Number(item.unit_price) * item.quantity, 0) -
+        Number(order.final_amount) - Number(order.coupon_discount_amount)
+      )
+    })));
   })
 );
 app.get(
@@ -1060,7 +1180,15 @@ app.use((err, _req, res, _next) => {
 });
 const PORT = Number(process.env.PORT || 5000);
 pool
-  .query('SELECT 1 FROM services LIMIT 1')
+  .query(`ALTER TABLE coupons
+    ADD COLUMN IF NOT EXISTS used_order_id INTEGER REFERENCES appointments(id),
+    ADD COLUMN IF NOT EXISTS applied_amount INTEGER NOT NULL DEFAULT 0`)
+  .then(() => pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS coupons_used_order_unique
+    ON coupons(used_order_id) WHERE used_order_id IS NOT NULL`))
+  .then(() => pool.query('DROP INDEX IF EXISTS coupons_one_active_per_user_idx'))
+  .then(() => pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS coupons_one_active_legacy_user_idx
+    ON coupons(user_id) WHERE user_id IS NOT NULL AND active=true AND code NOT LIKE 'FUR-P-%'`))
+  .then(() => pool.query('SELECT 1 FROM services LIMIT 1'))
   .then(() =>
     app.listen(PORT, () => console.log(`API «Мебельный магазин» запущен на порту ${PORT}`))
   )

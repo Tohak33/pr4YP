@@ -51,6 +51,12 @@ export default function ReceiptModal({ receipt, onClose }) {
             <span>−{receipt.personal_discount_amount.toLocaleString('ru-RU')} ₽</span>
           </div>
         )}
+        {receipt.coupon_code && (
+          <div className="total-line discount-line">
+            <span>Купон {receipt.coupon_code} ({receipt.coupon_discount_percent}%)</span>
+            <span>−{receipt.coupon_discount_amount.toLocaleString('ru-RU')} ₽</span>
+          </div>
+        )}
         <div className="total-line final-line">
           <span>Одна общая сумма</span>
           <strong>{receipt.final_amount.toLocaleString('ru-RU')} ₽</strong>
