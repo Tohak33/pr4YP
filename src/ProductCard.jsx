@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import Reviews from './Reviews';
 
-export default function ProductCard({ product, user, onAdd }) {
+export default function ProductCard({ product, user, onAdd, cartBusy }) {
   const [showReviews, setShowReviews] = useState(false);
   const [adding, setAdding] = useState(false);
   const [failedImageUrl, setFailedImageUrl] = useState('');
@@ -12,8 +12,8 @@ export default function ProductCard({ product, user, onAdd }) {
     {product.discount_percent > 0 && <span className="discount-tag">−{product.discount_percent}%</span>}
   </div><div className="product-info"><span className="product-code">{product.category}</span><h3 className="product-title">{product.name}</h3>
     <p className="product-desc">{product.description}</p><span className="product-duration">Гарантия {product.warranty_months} мес.</span>
-    <div className="price-row">{product.discount_percent > 0 && <span className="old-price">{product.price} ₽</span>}<strong className="current-price">{price.toLocaleString('ru-RU')} ₽</strong></div>
-  </div><div className="product-actions">{user?.role !== 'admin' && <button className="btn-add-cart" disabled={adding} onClick={add}>{adding ? 'Добавление...' : user ? 'В корзину' : 'Войти для покупки'}</button>}
+    <div className="price-row">{product.discount_percent > 0 && <span className="old-price">{Number(product.price).toLocaleString('ru-RU')} ₽</span>}<strong className="current-price">{price.toLocaleString('ru-RU')} ₽</strong></div>
+  </div><div className="product-actions">{user?.role !== 'admin' && <button className="btn-add-cart" disabled={adding || (user && cartBusy)} onClick={add}>{adding ? 'Добавление...' : user ? 'В корзину' : 'Войти для покупки'}</button>}
     <button className="review-toggle" onClick={() => setShowReviews(!showReviews)}>{showReviews ? 'Скрыть отзывы' : 'Отзывы'}</button></div>
     {showReviews && <Reviews code={product.code} />}</article>;
 }

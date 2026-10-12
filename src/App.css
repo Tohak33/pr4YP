@@ -1,4 +1,4 @@
-/* «Дом и Форма»: простая базовая разметка без декоративных эффектов. */
+/* «Мебельный магазин»: простая базовая разметка без декоративных эффектов. */
 * { box-sizing: border-box; }
 body { margin: 0; font-family: Arial, sans-serif; color: #222; background: #f7f7f7; }
 h1, h2, h3, h4, p { margin-top: 0; }

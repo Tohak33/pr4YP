@@ -7,6 +7,7 @@ export default function ResetPassword() {
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [sent, setSent] = useState(false);
+  const [done, setDone] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -14,9 +15,12 @@ export default function ResetPassword() {
     event.preventDefault(); setError(''); setMessage(''); setLoading(true);
     try {
       const data = await api(sent ? '/auth/reset' : '/auth/forgot', { method: 'POST', body: JSON.stringify(sent ? { email, code, password } : { email }) });
-      setMessage(data.message); if (!sent) setSent(true);
+      setMessage(data.message);
+      if (sent) { setDone(true); setCode(''); setPassword(''); }
+      else setSent(true);
     } catch (err) { setError(err.message); } finally { setLoading(false); }
   }
+  if (done) return <div className="auth-container"><div className="auth-card"><h2>Пароль изменён</h2><p>{message}</p><Link to="/login">Войти с новым паролем</Link></div></div>;
   return <div className="auth-container"><form className="auth-card" onSubmit={submit}>
     <h2>Восстановление пароля</h2>{message && <div className="success-message">{message}</div>}{error && <div className="error-message">{error}</div>}
     <div className="form-group"><label>Email</label><input type="email" required value={email} onChange={e => setEmail(e.target.value)} /></div>

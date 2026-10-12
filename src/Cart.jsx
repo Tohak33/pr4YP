@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { AuthContext, CartContext, MAX_QUANTITY } from './contexts';
 import { api } from './api';
@@ -21,12 +21,19 @@ function CartContent({ user }) {
   const [receipt, setReceipt] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [minDate] = useState(() => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' }));
+  const [minDate, setMinDate] = useState(() => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' }));
+  useEffect(() => {
+    const refreshDate = () => setMinDate(new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' }));
+    const timer = setInterval(refreshDate, 60000);
+    window.addEventListener('focus', refreshDate);
+    return () => { clearInterval(timer); window.removeEventListener('focus', refreshDate); };
+  }, []);
   const totalQuantity = cartItems.reduce((n, item) => n + item.quantity, 0);
   const subtotal = cartItems.reduce((n, item) => n + Math.max(1, Math.round(Number(item.price) * (1 - item.discount_percent / 100))) * item.quantity, 0);
   async function checkout(event) {
     event.preventDefault(); setError('');
-    if (!address.trim() || !date || date < minDate) return setError('Укажите адрес и дату доставки не раньше сегодня');
+    const currentDate = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });
+    if (!address.trim() || !date || date < currentDate) return setError('Укажите адрес и дату доставки не раньше сегодня');
     if (totalQuantity > MAX_QUANTITY) return setError('В одном заказе может быть не более 10 товаров');
     setLoading(true);
     try { const data = await api('/orders', { method: 'POST', body: JSON.stringify({ delivery_address: address.trim(), delivery_date: date }) }); clearCart(); setReceipt(data.receipt); }
@@ -35,9 +42,9 @@ function CartContent({ user }) {
   return <div className="cart-page"><h1>Корзина</h1>{cartError && <div className="error-message">{cartError}</div>}{error && <div className="error-message">{error}</div>}
     {cartLoading && <div className="info-message">Загрузка корзины...</div>}
     {updating && <div className="info-message">Обновление корзины...</div>}
-    {!cartLoading && !cartItems.length && <p className="empty-message">В корзине пока нет товаров</p>}
+    {!cartLoading && !cartError && !cartItems.length && <p className="empty-message">В корзине пока нет товаров</p>}
     {!!cartItems.length && <div className="cart-content"><div className="cart-items-table">{cartItems.map(item => <div className="cart-item-row" key={item.code}>
-      <img className="cart-item-image" src={item.image_url} alt={item.name} loading="lazy" /><div className="cart-item-details"><h3>{item.name}</h3><p>{item.category}</p><strong>{Math.max(1, Math.round(Number(item.price) * (1 - item.discount_percent / 100)))} ₽</strong></div>
+      <img className="cart-item-image" src={item.image_url} alt={item.name} loading="lazy" /><div className="cart-item-details"><h3>{item.name}</h3><p>{item.category}</p><strong>{Math.max(1, Math.round(Number(item.price) * (1 - item.discount_percent / 100))).toLocaleString('ru-RU')} ₽</strong></div>
       <div className="quantity-controls"><button aria-label="Уменьшить" disabled={updating || item.quantity <= 1} onClick={() => updateQuantity(item.code, -1).catch(err => setError(err.message))}>−</button><span>{item.quantity}</span>
         <button aria-label="Увеличить" disabled={updating || totalQuantity >= MAX_QUANTITY} onClick={() => updateQuantity(item.code, 1).catch(err => setError(err.message))}>+</button></div>
       <button className="btn-remove" disabled={updating} onClick={() => removeFromCart(item.code).catch(err => setError(err.message))}>Удалить</button></div>)}</div>

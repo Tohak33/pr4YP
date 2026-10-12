@@ -10,7 +10,7 @@ export function AuthProvider({ children }) {
     let active = true;
     const refresh = () => {
       const token = getToken();
-      if (!token) { setReady(true); return; }
+      if (!token) { setUser(null); setReady(true); return; }
       setReady(false);
       api('/auth/me').then(data => { if (active && getToken() === token) setUser(data.user); })
         .catch(error => {
@@ -21,7 +21,8 @@ export function AuthProvider({ children }) {
     };
     refresh();
     window.addEventListener('furniture:online', refresh);
-    return () => { active = false; window.removeEventListener('furniture:online', refresh); };
+    window.addEventListener('storage', refresh);
+    return () => { active = false; window.removeEventListener('furniture:online', refresh); window.removeEventListener('storage', refresh); };
   }, []);
   const login = data => { setToken(data.token); setUser(data.user); setReady(true); };
   const logout = async () => {

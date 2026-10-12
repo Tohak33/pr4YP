@@ -13,6 +13,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 const MAX_QUANTITY = 10;
+const legacyCategories = ['Смартфоны', 'Наушники'];
 const tokenHash = value => crypto.createHash('sha256').update(value).digest('hex');
 const fail = (res, status, error) => res.status(status).json({ error });
 const safe = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -42,7 +43,8 @@ const validName = name => {
 };
 const validEmail = email => typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 const validPhone = phone => typeof phone === 'string' && /^\+7 \(\d{3}\) \d{3}-\d{2}-\d{2}$/.test(phone);
-const publicUser = row => ({ name: row.name, email: row.email, phone: row.phone || '', address: row.address || '', role: row.role });
+const publicUser = row => ({ name: row.name, email: row.email, phone: row.phone || '',
+  ...(row.role === 'admin' ? {} : { address: row.address || '' }), role: row.role });
 
 // Сессия живёт 30 дней, поэтому прямые ссылки и новые вкладки сохраняют вход.
 async function issueSession(client, row) {
@@ -60,7 +62,7 @@ const authenticate = safe(async (req, res, next) => {
   req.user = result.rows[0]; req.token = token; next();
 });
 const admin = (req, res, next) => req.user.role === 'admin' ? next() : fail(res, 403, 'Доступ запрещён');
-const customer = (req, res, next) => req.user.role !== 'admin' ? next() : fail(res, 403, 'Доступ запрещён');
+const customer = (req, res, next) => req.user.role === 'customer' ? next() : fail(res, 403, 'Доступ запрещён');
 
 app.get('/api/health', safe(async (_req, res) => { await pool.query('SELECT 1'); res.json({ ok: true }); }));
 app.post('/api/auth/register', safe(async (req, res) => {
@@ -96,12 +98,15 @@ app.post('/api/auth/logout', authenticate, safe(async (req, res) => {
 }));
 app.put('/api/auth/profile', authenticate, safe(async (req, res) => {
   const { name, email, phone, address, password } = req.body;
-  if (!validName(name) || !validEmail(email) || !validPhone(phone) || typeof address !== 'string' || address.length > 500 || (password && password.length < 8))
+  if (!validName(name) || !validEmail(email) || !validPhone(phone)
+    || (req.user.role !== 'admin' && (typeof address !== 'string' || address.length > 500))
+    || (password && password.length < 8))
     return fail(res, 400, 'Проверьте ФИО, email, телефон, адрес и пароль');
   try {
     const result = await pool.query(`UPDATE users SET name=$1,email=$2,phone=$3,address=$4,
       password_hash=COALESCE($5,password_hash) WHERE id=$6 RETURNING *`,
-      [name.trim(), email.trim().toLowerCase(), phone, address.trim(), password ? hashPassword(password) : null, req.user.id]);
+      [name.trim(), email.trim().toLowerCase(), phone,
+        req.user.role === 'admin' ? req.user.address : address.trim(), password ? hashPassword(password) : null, req.user.id]);
     res.json({ user: publicUser({ ...result.rows[0], role: req.user.role }) });
   } catch (e) { if (e.code === '23505') return fail(res, 409, 'Email уже занят'); throw e; }
 }));
@@ -115,16 +120,21 @@ app.post('/api/auth/forgot', safe(async (req, res) => {
   const result = await pool.query('SELECT id FROM users WHERE lower(email)=lower($1)', [email]);
   if (result.rowCount) {
     const code = crypto.randomInt(100000, 1000000).toString();
-    await pool.query(`INSERT INTO password_resets(user_id,code_hash,expires_at) VALUES($1,$2,now()+interval '10 minutes')
-      ON CONFLICT(user_id) DO UPDATE SET code_hash=EXCLUDED.code_hash,expires_at=EXCLUDED.expires_at`, [result.rows[0].id, tokenHash(code)]);
-    // Системное разрешение имени работает и там, где DNS-запросы SMTP-библиотеки недоступны.
-    const smtpHost = process.env.SMTP_HOST;
-    const { address } = await dns.lookup(smtpHost, { family: 4 });
-    const transport = nodemailer.createTransport({ host: address, port: Number(process.env.SMTP_PORT || 587),
-      secure: process.env.SMTP_SECURE === 'true', tls: { servername: smtpHost },
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD } });
-    await transport.sendMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER, to: email, subject: 'Мебельный магазин — восстановление пароля',
-      text: `Код для сброса пароля: ${code}. Он действует 10 минут.` });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`INSERT INTO password_resets(user_id,code_hash,expires_at) VALUES($1,$2,now()+interval '10 minutes')
+        ON CONFLICT(user_id) DO UPDATE SET code_hash=EXCLUDED.code_hash,expires_at=EXCLUDED.expires_at`, [result.rows[0].id, tokenHash(code)]);
+      // Не заменяем прежний рабочий код, если SMTP не смог отправить новое письмо.
+      const smtpHost = process.env.SMTP_HOST;
+      const { address } = await dns.lookup(smtpHost, { family: 4 });
+      const transport = nodemailer.createTransport({ host: address, port: Number(process.env.SMTP_PORT || 587),
+        secure: process.env.SMTP_SECURE === 'true', tls: { servername: smtpHost },
+        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD } });
+      await transport.sendMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER, to: email, subject: 'Мебельный магазин — восстановление пароля',
+        text: `Код для сброса пароля: ${code}. Он действует 10 минут.` });
+      await client.query('COMMIT');
+    } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
   }
   res.json({ message: 'Если адрес зарегистрирован, письмо с кодом отправлено' });
 }));
@@ -132,13 +142,20 @@ app.post('/api/auth/reset', safe(async (req, res) => {
   const { email, code, password } = req.body;
   if (!validEmail(email) || !/^\d{6}$/.test(code || '') || typeof password !== 'string' || password.length < 8)
     return fail(res, 400, 'Проверьте email, шестизначный код и новый пароль от 8 символов');
-  const result = await pool.query(`SELECT p.user_id,p.code_hash FROM password_resets p JOIN users u ON u.id=p.user_id
-    WHERE lower(u.email)=lower($1) AND p.expires_at>now()`, [email]);
-  if (!result.rowCount || result.rows[0].code_hash !== tokenHash(code)) return fail(res, 400, 'Неверный или просроченный код');
-  await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hashPassword(password), result.rows[0].user_id]);
-  await pool.query('DELETE FROM password_resets WHERE user_id=$1', [result.rows[0].user_id]);
-  await pool.query('DELETE FROM sessions WHERE user_id=$1', [result.rows[0].user_id]);
-  res.json({ message: 'Пароль изменён. Теперь войдите в аккаунт' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(`SELECT p.user_id,p.code_hash FROM password_resets p JOIN users u ON u.id=p.user_id
+      WHERE lower(u.email)=lower($1) AND p.expires_at>now() FOR UPDATE OF p`, [email]);
+    if (!result.rowCount || result.rows[0].code_hash !== tokenHash(code)) {
+      await client.query('ROLLBACK'); return fail(res, 400, 'Неверный или просроченный код');
+    }
+    await client.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hashPassword(password), result.rows[0].user_id]);
+    await client.query('DELETE FROM password_resets WHERE user_id=$1', [result.rows[0].user_id]);
+    await client.query('DELETE FROM sessions WHERE user_id=$1', [result.rows[0].user_id]);
+    await client.query('COMMIT');
+    res.json({ message: 'Пароль изменён. Теперь войдите в аккаунт' });
+  } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
 }));
 
 app.get('/api/categories', safe(async (_req, res) => {
@@ -148,13 +165,16 @@ app.get('/api/categories', safe(async (_req, res) => {
 app.post('/api/admin/categories', authenticate, admin, safe(async (req, res) => {
   const name = String(req.body.name || '').trim();
   if (name.length < 2 || name.length > 60) return fail(res, 400, 'Название категории: от 2 до 60 символов');
+  if (legacyCategories.includes(name)) return fail(res, 400, 'Название зарезервировано для прежнего каталога');
   try { const result = await pool.query('INSERT INTO categories(name) VALUES($1) RETURNING name', [name]); res.status(201).json(result.rows[0]); }
   catch (e) { if (e.code === '23505') return fail(res, 409, 'Категория уже существует'); throw e; }
 }));
 app.put('/api/admin/categories/:name', authenticate, admin, safe(async (req, res) => {
   if (req.params.name === 'Без категории') return fail(res, 400, 'Нейтральную категорию нельзя переименовать');
+  if (legacyCategories.includes(req.params.name)) return fail(res, 403, 'Эта категория не относится к мебели');
   const name = String(req.body.name || '').trim();
   if (name.length < 2 || name.length > 60) return fail(res, 400, 'Название категории: от 2 до 60 символов');
+  if (legacyCategories.includes(name)) return fail(res, 400, 'Название зарезервировано для прежнего каталога');
   try {
     const result = await pool.query('UPDATE categories SET name=$1 WHERE name=$2 RETURNING name', [name, req.params.name]);
     if (!result.rowCount) return fail(res, 404, 'Категория не найдена');
@@ -164,6 +184,7 @@ app.put('/api/admin/categories/:name', authenticate, admin, safe(async (req, res
 app.delete('/api/admin/categories/:name', authenticate, admin, safe(async (req, res) => {
   const name = req.params.name;
   if (name === 'Без категории') return fail(res, 400, 'Эту категорию нельзя удалить');
+  if (legacyCategories.includes(name)) return fail(res, 403, 'Эта категория не относится к мебели');
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -187,13 +208,16 @@ app.post('/api/admin/services', authenticate, admin, safe(async (req, res) => {
   const { code, name, description, category, warranty_months, price, image_url, discount_percent = 0 } = req.body;
   const discount = Number(discount_percent);
   if (!/^FUR-[A-Z0-9-]{3,30}$/.test(code || '') || !name?.trim() || !description?.trim()
-    || !Number.isFinite(Number(price)) || !(Number(price) > 0)
+    || !Number.isInteger(Number(price)) || !(Number(price) > 0)
     || !Number.isInteger(Number(warranty_months)) || !(Number(warranty_months) > 0)
-    || !Number.isInteger(discount) || discount < 0 || discount > 99 || !/^https?:\/\/\S+$/i.test(image_url || ''))
+    || !Number.isInteger(discount) || discount < 0 || discount > 99
+    || (discount > 0 && Math.max(1, Math.round(Number(price) * (1 - discount / 100))) >= Number(price))
+    || !/^https?:\/\/\S+$/i.test(image_url || ''))
     return fail(res, 400, 'Заполните товар, код FUR-…, описание, фото, гарантию, цену больше нуля и скидку 0–99%');
   try {
     const result = await pool.query(`INSERT INTO services(code,category_id,name,description,duration,price,discount_percent,image,active)
-      SELECT $1,c.id,$2,$3,$4,$5,$6,$7,true FROM categories c WHERE c.name=$8 RETURNING code`,
+      SELECT $1,c.id,$2,$3,$4,$5,$6,$7,true FROM categories c
+      WHERE c.name=$8 AND c.name NOT IN ('Смартфоны','Наушники') RETURNING code`,
       [code, name.trim(), description.trim(), Number(warranty_months), Number(price), discount, image_url.trim(), category]);
     if (!result.rowCount) return fail(res, 400, 'Категория не найдена');
     res.status(201).json(result.rows[0]);
@@ -202,12 +226,15 @@ app.post('/api/admin/services', authenticate, admin, safe(async (req, res) => {
 app.put('/api/admin/services/:code', authenticate, admin, safe(async (req, res) => {
   const { name, description, category, warranty_months, price, image_url, discount_percent } = req.body;
   const discount = Number(discount_percent);
-  if (!name?.trim() || !description?.trim() || !Number.isFinite(Number(price)) || !(Number(price) > 0)
+  if (!name?.trim() || !description?.trim() || !Number.isInteger(Number(price)) || !(Number(price) > 0)
     || !Number.isInteger(Number(warranty_months)) || !(Number(warranty_months) > 0)
-    || !Number.isInteger(discount) || discount < 0 || discount > 99 || !/^https?:\/\/\S+$/i.test(image_url || ''))
+    || !Number.isInteger(discount) || discount < 0 || discount > 99
+    || (discount > 0 && Math.max(1, Math.round(Number(price) * (1 - discount / 100))) >= Number(price))
+    || !/^https?:\/\/\S+$/i.test(image_url || ''))
     return fail(res, 400, 'Проверьте название, описание, фото, гарантию, цену и скидку');
   const result = await pool.query(`UPDATE services s SET name=$1,description=$2,duration=$3,price=$4,image=$5,
-    discount_percent=$6,category_id=c.id FROM categories c WHERE s.code=$7 AND c.name=$8 AND s.code LIKE 'FUR-%' RETURNING s.code`,
+    discount_percent=$6,category_id=c.id FROM categories c WHERE s.code=$7 AND c.name=$8
+      AND c.name NOT IN ('Смартфоны','Наушники') AND s.code LIKE 'FUR-%' RETURNING s.code`,
     [name.trim(), description.trim(), Number(warranty_months), Number(price), image_url.trim(), discount, req.params.code, category]);
   if (!result.rowCount) return fail(res, 404, 'Товар или категория не найдены');
   res.json(result.rows[0]);
@@ -238,12 +265,13 @@ app.put('/api/cart/:code', authenticate, customer, safe(async (req, res) => {
       WHERE ci.service_id=s.id AND ci.user_id=$1 AND s.code=$2`, [req.user.id, req.params.code]);
     return res.json((await pool.query(cartQuery, [req.user.id])).rows);
   }
-  const service = await pool.query(`SELECT id FROM services WHERE code=$1 AND code LIKE 'FUR-%' AND active=true AND price>0`, [req.params.code]);
-  if (!service.rowCount) return fail(res, 404, 'Товар недоступен');
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query("SELECT pg_advisory_xact_lock(hashtext('cart'), $1)", [req.user.id]);
+    const service = await client.query(`SELECT id FROM services WHERE code=$1 AND code LIKE 'FUR-%'
+      AND active=true AND price>0 FOR SHARE`, [req.params.code]);
+    if (!service.rowCount) { await client.query('ROLLBACK'); return fail(res, 404, 'Товар недоступен'); }
     const total = await client.query(`SELECT COALESCE(SUM(ci.quantity),0)::int AS quantity FROM cart_items ci
       JOIN services s ON s.id=ci.service_id
       WHERE ci.user_id=$1 AND ci.service_id<>$2 AND s.code LIKE 'FUR-%' AND s.active=true`, [req.user.id, service.rows[0].id]);
@@ -257,18 +285,67 @@ app.put('/api/cart/:code', authenticate, customer, safe(async (req, res) => {
   res.json((await pool.query(cartQuery, [req.user.id])).rows);
 }));
 
-const profanity = /(?:хуй|хуя|хуе|хуи|оху|пизд|пидор|заеб|наеб|уеб|выеб|проеб|долбо[её]б|(?:^|[^\p{L}])(?:еба|ёба|ебл|ёбл|еби|ёби|ебу|ёбу|ебн|ёбн|бля|сука|сучк|мудак|fuck|shit|bitch)[\p{L}]*)/iu;
+// Добавление увеличивает число на сервере и не перезаписывает корзину из другой вкладки.
+app.post('/api/cart/:code', authenticate, customer, safe(async (req, res) => {
+  const delta = req.body?.delta === undefined ? 1 : Number(req.body.delta);
+  if (delta !== 1 && delta !== -1) return fail(res, 400, 'Количество можно менять по одной единице');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('cart'), $1)", [req.user.id]);
+    const service = await client.query(`SELECT id FROM services WHERE code=$1 AND code LIKE 'FUR-%'
+      AND active=true AND price>0 FOR SHARE`, [req.params.code]);
+    if (!service.rowCount) { await client.query('ROLLBACK'); return fail(res, 404, 'Товар недоступен'); }
+    const total = await client.query(`SELECT COALESCE(SUM(ci.quantity),0)::int AS quantity FROM cart_items ci
+      JOIN services s ON s.id=ci.service_id WHERE ci.user_id=$1 AND s.code LIKE 'FUR-%' AND s.active=true`, [req.user.id]);
+    if (delta === 1 && total.rows[0].quantity >= MAX_QUANTITY) {
+      await client.query('ROLLBACK'); return fail(res, 400, 'В корзине может быть не более 10 товаров суммарно');
+    }
+    if (delta === 1) {
+      await client.query(`INSERT INTO cart_items(user_id,service_id,quantity) VALUES($1,$2,1)
+        ON CONFLICT(user_id,service_id) DO UPDATE SET quantity=cart_items.quantity+1`, [req.user.id, service.rows[0].id]);
+    } else {
+      const changed = await client.query(`UPDATE cart_items SET quantity=quantity-1
+        WHERE user_id=$1 AND service_id=$2 AND quantity>1 RETURNING quantity`, [req.user.id, service.rows[0].id]);
+      if (!changed.rowCount) { await client.query('ROLLBACK'); return fail(res, 400, 'Чтобы убрать последнюю единицу, удалите товар'); }
+    }
+    await client.query('COMMIT');
+    res.json((await pool.query(cartQuery, [req.user.id])).rows);
+  } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
+}));
+
+const profanity = /(?:хуй|хуя|хуе|хуи|оху|пизд|пидор|пидр|заеб|наеб|уеб|выеб|проеб|долбо[её]б|(?:^|[^\p{L}])(?:еба|ёба|ебл|ёбл|еби|ёби|ебу|ёбу|ебн|ёбн|бля|сука|сучк|мудак|fuck|shit|bitch)[\p{L}]*|(?:^|[^\p{L}])(?:ёб|еб)(?:$|[^\p{L}]))/iu;
+const reviewEligibilityQuery = `SELECT s.code,
+  EXISTS (SELECT 1 FROM appointment_services i JOIN appointments a ON a.id=i.appointment_id
+    JOIN payments p ON p.appointment_id=a.id
+    WHERE i.service_id=s.id AND a.user_id=$1 AND p.status='Оплачено') AS purchased,
+  EXISTS (SELECT 1 FROM reviews r WHERE r.service_id=s.id AND r.user_id=$1) AS reviewed
+  FROM services s WHERE s.code=$2 AND s.code LIKE 'FUR-%' AND s.active=true`;
 app.get('/api/services/:code/reviews', safe(async (req, res) => {
   const result = await pool.query(`SELECT u.name,r.rating,r.created_at,r.deleted_by_admin,
     CASE WHEN r.deleted_by_admin THEN 'Удалено администратором за нарушение политики' ELSE r.comment END AS comment
     FROM reviews r JOIN users u ON u.id=r.user_id JOIN services s ON s.id=r.service_id
-    WHERE s.code=$1 AND s.code LIKE 'FUR-%' ORDER BY r.created_at DESC`, [req.params.code]);
+    WHERE s.code=$1 AND s.code LIKE 'FUR-%' AND (r.deleted_by_admin OR EXISTS (
+      SELECT 1 FROM appointment_services i JOIN appointments a ON a.id=i.appointment_id
+      JOIN payments p ON p.appointment_id=a.id
+      WHERE i.service_id=s.id AND a.user_id=r.user_id AND p.status='Оплачено'))
+    ORDER BY r.created_at DESC`, [req.params.code]);
   res.json(result.rows);
+}));
+app.get('/api/services/:code/review-eligibility', authenticate, customer, safe(async (req, res) => {
+  const result = await pool.query(reviewEligibilityQuery, [req.user.id, req.params.code]);
+  if (!result.rowCount) return fail(res, 404, 'Товар не найден');
+  res.json({ can_review: result.rows[0].purchased && !result.rows[0].reviewed,
+    purchased: result.rows[0].purchased, reviewed: result.rows[0].reviewed });
 }));
 app.post('/api/services/:code/reviews', authenticate, customer, safe(async (req, res) => {
   const rating = Number(req.body.rating), comment = String(req.body.comment || '').trim();
   if (!Number.isInteger(rating) || rating < 1 || rating > 5 || comment.length < 3 || comment.length > 1000 || profanity.test(comment))
     return fail(res, 400, 'Отзыв должен содержать 3–1000 символов, оценку 1–5 и не содержать мат');
+  const eligibility = await pool.query(reviewEligibilityQuery, [req.user.id, req.params.code]);
+  if (!eligibility.rowCount) return fail(res, 404, 'Товар не найден');
+  if (!eligibility.rows[0].purchased) return fail(res, 403, 'Оставить отзыв можно после оплаты заказа с этим товаром');
+  if (eligibility.rows[0].reviewed) return fail(res, 409, 'Вы уже оставили отзыв об этом товаре');
   try {
     const result = await pool.query(`INSERT INTO reviews(user_id,service_id,rating,comment)
       SELECT $1,s.id,$2,$3 FROM services s WHERE s.code=$4 AND s.code LIKE 'FUR-%' AND s.active=true RETURNING id`, [req.user.id, rating, comment, req.params.code]);
@@ -300,6 +377,7 @@ app.post('/api/orders', authenticate, customer, safe(async (req, res) => {
   try {
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [date]);
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('cart'), $1)", [req.user.id]);
     const cart = await client.query(`SELECT s.id,s.code,s.name,s.price,s.discount_percent,s.image,s.active,ci.quantity
       FROM cart_items ci JOIN services s ON s.id=ci.service_id
       WHERE ci.user_id=$1 AND s.code LIKE 'FUR-%' FOR UPDATE OF ci`, [req.user.id]);
@@ -338,7 +416,7 @@ app.post('/api/orders', authenticate, customer, safe(async (req, res) => {
   } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
 }));
 app.get('/api/orders', authenticate, customer, safe(async (req, res) => {
-  const result = await pool.query(`SELECT a.id,a.status,a.total AS final_amount,a.created_at,a.delivery_date,a.delivery_address,
+  const result = await pool.query(`SELECT a.id,a.status,a.total AS final_amount,a.created_at,a.delivery_date::text AS delivery_date,a.delivery_address,
     COALESCE(json_agg(json_build_object('name',s.name,'code',s.code,'quantity',i.quantity,
       'unit_price',i.unit_price,'original_price',i.original_price,'discount_percent',i.discount_percent))
       FILTER (WHERE s.id IS NOT NULL),'[]') AS items
@@ -350,7 +428,7 @@ app.get('/api/orders', authenticate, customer, safe(async (req, res) => {
   res.json(result.rows.map(({ id, ...order }) => ({ ...order, order_number: `FUR-${id}` })));
 }));
 app.get('/api/admin/orders', authenticate, admin, safe(async (_req, res) => {
-  const result = await pool.query(`SELECT a.id,a.status,a.total,a.delivery_date,a.delivery_address,u.email
+  const result = await pool.query(`SELECT a.id,a.status,a.total,a.delivery_date::text AS delivery_date,a.delivery_address,u.email
     FROM appointments a JOIN users u ON u.id=a.user_id
     WHERE EXISTS (SELECT 1 FROM appointment_services i JOIN services s ON s.id=i.service_id
       WHERE i.appointment_id=a.id AND s.code LIKE 'FUR-%') ORDER BY a.id DESC`);

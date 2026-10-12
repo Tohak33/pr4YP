@@ -9,7 +9,7 @@ export default function Profile() {
   const { user, ready } = useContext(AuthContext);
   if (!ready) return <div className="info-message">Загрузка профиля...</div>;
   if (!user) return <Navigate to="/login" replace />;
-  return <ProfileContent key={user.email} user={user} />;
+  return <ProfileContent user={user} />;
 }
 
 function ProfileContent({ user }) {
@@ -19,11 +19,12 @@ function ProfileContent({ user }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
   const [ordersLoading, setOrdersLoading] = useState(user.role !== 'admin');
+  const [ordersError, setOrdersError] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   useEffect(() => {
     if (user.role === 'admin') return;
-    api('/orders').then(setOrders).catch(err => setError(err.message)).finally(() => setOrdersLoading(false));
+    api('/orders').then(setOrders).catch(err => setOrdersError(err.message)).finally(() => setOrdersLoading(false));
   }, [user.role]);
   const change = (key, value) => setForm(current => ({ ...current, [key]: value }));
   async function submit(event) {
@@ -44,11 +45,13 @@ function ProfileContent({ user }) {
       <div className="form-group"><label>Новый пароль</label><input type="password" placeholder="Оставьте пустым, чтобы не менять" value={form.password} onChange={e => change('password', e.target.value)} /></div>
       <button className="btn-primary" disabled={loading}>{loading ? 'Сохранение...' : 'Сохранить'}</button>
     </form>
-    {user.role !== 'admin' && <section className="order-history card"><h3>Мои заказы</h3>{ordersLoading && <div className="info-message">Загрузка заказов...</div>}
-      {!ordersLoading && !orders.length && <p className="empty-message">Заказов пока нет</p>}
+    {user.role !== 'admin' && <section className="order-history card"><h3>Мои заказы</h3>{ordersLoading && <div className="info-message">Загрузка заказов...</div>}{ordersError && <div className="error-message">{ordersError}</div>}
+      {!ordersLoading && !ordersError && !orders.length && <p className="empty-message">Заказов пока нет</p>}
       {orders.map(order => <article className="order-box" key={order.order_number}><div className="order-header"><strong>№ {order.order_number}</strong><span>{new Date(order.created_at).toLocaleDateString('ru-RU')}</span><span className="order-status">{order.status}</span></div>
-        <p>Доставка: {order.delivery_date || '—'}, {order.delivery_address}</p>
-        <ul className="order-items-sublist">{order.items.map(item => <li key={item.code}><span>{item.name} × {item.quantity}</span><span>{Number(item.unit_price) * item.quantity} ₽</span></li>)}</ul>
-        <div className="order-footer">Общая сумма заказа: <strong>{order.final_amount} ₽</strong></div></article>)}
+        <p>Доставка: {order.delivery_date ? new Date(`${order.delivery_date}T00:00:00`).toLocaleDateString('ru-RU') : '—'}, {order.delivery_address}</p>
+        <ul className="order-items-sublist">{order.items.map(item => <li key={item.code}><span>{item.name} × {item.quantity}</span><span>{(Number(item.unit_price) * item.quantity).toLocaleString('ru-RU')} ₽</span></li>)}</ul>
+        {Number(order.final_amount) < order.items.reduce((sum, item) => sum + Number(item.unit_price) * item.quantity, 0) &&
+          <p>Скидка на первый заказ: {(order.items.reduce((sum, item) => sum + Number(item.unit_price) * item.quantity, 0) - Number(order.final_amount)).toLocaleString('ru-RU')} ₽</p>}
+        <div className="order-footer">Общая сумма заказа: <strong>{Number(order.final_amount).toLocaleString('ru-RU')} ₽</strong></div></article>)}
     </section>}</div></div>;
 }
