@@ -378,6 +378,17 @@ app.get(
     res.json(result.rows);
   })
 );
+async function discountCoverageError(client) {
+  const result = await client.query(`SELECT COUNT(*)::int AS total,
+    COUNT(*) FILTER (WHERE s.discount_percent > 0)::int AS discounted
+    FROM services s JOIN categories c ON c.id=s.category_id
+    WHERE s.active=true AND s.code LIKE 'FUR-%' AND s.price>0`);
+  const { total, discounted } = result.rows[0];
+  const minimum = Math.ceil(total * 0.3);
+  return discounted < minimum
+    ? `Скидка должна быть минимум у ${minimum} из ${total} товаров (30%). Сейчас: ${discounted}`
+    : null;
+}
 app.post(
   '/api/admin/services',
   authenticate,
@@ -414,8 +425,11 @@ app.post(
         400,
         'Заполните товар, код FUR-…, описание, фото, гарантию, цену больше нуля и скидку 0–99%'
       );
+    const client = await pool.connect();
     try {
-      const result = await pool.query(
+      await client.query('BEGIN');
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('furniture_discount_coverage'))");
+      const result = await client.query(
         `INSERT INTO services(code,category_id,name,description,duration,price,discount_percent,image,active)
       SELECT $1,c.id,$2,$3,$4,$5,$6,$7,true FROM categories c
       WHERE c.name=$8 RETURNING code`,
@@ -430,11 +444,23 @@ app.post(
           category
         ]
       );
-      if (!result.rowCount) return fail(res, 400, 'Категория не найдена');
+      if (!result.rowCount) {
+        await client.query('ROLLBACK');
+        return fail(res, 400, 'Категория не найдена');
+      }
+      const coverageError = await discountCoverageError(client);
+      if (coverageError) {
+        await client.query('ROLLBACK');
+        return fail(res, 400, coverageError);
+      }
+      await client.query('COMMIT');
       res.status(201).json(result.rows[0]);
     } catch (e) {
+      await client.query('ROLLBACK');
       if (e.code === '23505') return fail(res, 409, 'Код товара уже существует');
       throw e;
+    } finally {
+      client.release();
     }
   })
 );
@@ -461,23 +487,42 @@ app.put(
       !/^https?:\/\/\S+$/i.test(image_url || '')
     )
       return fail(res, 400, 'Проверьте название, описание, фото, гарантию, цену и скидку');
-    const result = await pool.query(
-      `UPDATE services s SET name=$1,description=$2,duration=$3,price=$4,image=$5,
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('furniture_discount_coverage'))");
+      const result = await client.query(
+        `UPDATE services s SET name=$1,description=$2,duration=$3,price=$4,image=$5,
     discount_percent=$6,category_id=c.id FROM categories c WHERE s.code=$7 AND c.name=$8
       AND s.code LIKE 'FUR-%' RETURNING s.code`,
-      [
-        name.trim(),
-        description.trim(),
-        Number(warranty_months),
-        Number(price),
-        image_url.trim(),
-        discount,
-        req.params.code,
-        category
-      ]
-    );
-    if (!result.rowCount) return fail(res, 404, 'Товар или категория не найдены');
-    res.json(result.rows[0]);
+        [
+          name.trim(),
+          description.trim(),
+          Number(warranty_months),
+          Number(price),
+          image_url.trim(),
+          discount,
+          req.params.code,
+          category
+        ]
+      );
+      if (!result.rowCount) {
+        await client.query('ROLLBACK');
+        return fail(res, 404, 'Товар или категория не найдены');
+      }
+      const coverageError = await discountCoverageError(client);
+      if (coverageError) {
+        await client.query('ROLLBACK');
+        return fail(res, 400, coverageError);
+      }
+      await client.query('COMMIT');
+      res.json(result.rows[0]);
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
   })
 );
 app.delete(
@@ -488,6 +533,7 @@ app.delete(
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('furniture_discount_coverage'))");
       const result = await client.query(
         `UPDATE services SET active=false WHERE code=$1 AND code LIKE 'FUR-%' RETURNING id`,
         [req.params.code]
@@ -495,6 +541,11 @@ app.delete(
       if (!result.rowCount) {
         await client.query('ROLLBACK');
         return fail(res, 404, 'Товар не найден');
+      }
+      const coverageError = await discountCoverageError(client);
+      if (coverageError) {
+        await client.query('ROLLBACK');
+        return fail(res, 400, coverageError);
       }
       await client.query('DELETE FROM cart_items WHERE service_id=$1', [result.rows[0].id]);
       await client.query('COMMIT');
@@ -634,12 +685,24 @@ app.post(
 
 const profanity =
   /(?:хуй|хуя|хуе|хуи|оху|пизд|пидор|пидр|заеб|наеб|уеб|выеб|проеб|долбо[её]б|(?:^|[^\p{L}])(?:еба|ёба|ебл|ёбл|еби|ёби|ебу|ёбу|ебн|ёбн|бля|сука|сучк|мудак|fuck|shit|bitch)[\p{L}]*|(?:^|[^\p{L}])(?:ёб|еб)(?:$|[^\p{L}]))/iu;
+const validReview = (rating, comment) =>
+  Number.isInteger(rating) &&
+  rating >= 1 &&
+  rating <= 5 &&
+  comment.length >= 3 &&
+  comment.length <= 1000 &&
+  !profanity.test(comment);
 const reviewEligibilityQuery = `SELECT s.code,
   EXISTS (SELECT 1 FROM appointment_services i JOIN appointments a ON a.id=i.appointment_id
     JOIN payments p ON p.appointment_id=a.id
     WHERE i.service_id=s.id AND a.user_id=$1 AND p.status='Оплачено') AS purchased,
-  EXISTS (SELECT 1 FROM reviews r WHERE r.service_id=s.id AND r.user_id=$1) AS reviewed
-  FROM services s WHERE s.code=$2 AND s.code LIKE 'FUR-%' AND s.active=true`;
+  r.id IS NOT NULL AS reviewed,
+  CASE WHEN r.id IS NULL THEN NULL ELSE json_build_object(
+    'rating',r.rating,
+    'comment',CASE WHEN r.deleted_by_admin THEN 'Удалено администратором за нарушение политики' ELSE r.comment END,
+    'created_at',r.created_at,'deleted_by_admin',r.deleted_by_admin) END AS my_review
+  FROM services s LEFT JOIN reviews r ON r.service_id=s.id AND r.user_id=$1
+  WHERE s.code=$2 AND s.code LIKE 'FUR-%' AND s.active=true`;
 app.get(
   '/api/services/:code/reviews',
   safe(async (req, res) => {
@@ -667,7 +730,8 @@ app.get(
     res.json({
       can_review: result.rows[0].purchased && !result.rows[0].reviewed,
       purchased: result.rows[0].purchased,
-      reviewed: result.rows[0].reviewed
+      reviewed: result.rows[0].reviewed,
+      my_review: result.rows[0].my_review
     });
   })
 );
@@ -678,14 +742,7 @@ app.post(
   safe(async (req, res) => {
     const rating = Number(req.body.rating),
       comment = String(req.body.comment || '').trim();
-    if (
-      !Number.isInteger(rating) ||
-      rating < 1 ||
-      rating > 5 ||
-      comment.length < 3 ||
-      comment.length > 1000 ||
-      profanity.test(comment)
-    )
+    if (!validReview(rating, comment))
       return fail(
         res,
         400,
@@ -708,6 +765,56 @@ app.post(
       if (e.code === '23505') return fail(res, 409, 'Вы уже оставили отзыв об этом товаре');
       throw e;
     }
+  })
+);
+app.put(
+  '/api/services/:code/reviews',
+  authenticate,
+  customer,
+  safe(async (req, res) => {
+    const rating = Number(req.body.rating);
+    const comment = String(req.body.comment || '').trim();
+    if (!validReview(rating, comment))
+      return fail(
+        res,
+        400,
+        'Отзыв должен содержать 3–1000 символов, оценку 1–5 и не содержать мат'
+      );
+    const eligibility = await pool.query(reviewEligibilityQuery, [req.user.id, req.params.code]);
+    if (!eligibility.rowCount || !eligibility.rows[0].my_review)
+      return fail(res, 404, 'Ваш отзыв на этот товар не найден');
+    if (eligibility.rows[0].my_review.deleted_by_admin)
+      return fail(res, 403, 'Отзыв удалён администратором за нарушение политики');
+    if (!eligibility.rows[0].purchased)
+      return fail(res, 403, 'Изменить отзыв можно после оплаты заказа с этим товаром');
+    const result = await pool.query(
+      `UPDATE reviews r SET rating=$1,comment=$2 FROM services s
+       WHERE r.service_id=s.id AND r.user_id=$3 AND s.code=$4
+       AND s.code LIKE 'FUR-%' AND NOT r.deleted_by_admin RETURNING r.id`,
+      [rating, comment, req.user.id, req.params.code]
+    );
+    if (!result.rowCount) return fail(res, 409, 'Отзыв уже удалён. Обновите список отзывов');
+    res.json({ ok: true });
+  })
+);
+app.delete(
+  '/api/services/:code/reviews',
+  authenticate,
+  customer,
+  safe(async (req, res) => {
+    const eligibility = await pool.query(reviewEligibilityQuery, [req.user.id, req.params.code]);
+    if (!eligibility.rowCount || !eligibility.rows[0].my_review)
+      return fail(res, 404, 'Ваш отзыв на этот товар не найден');
+    if (eligibility.rows[0].my_review.deleted_by_admin)
+      return fail(res, 403, 'Отзыв удалён администратором за нарушение политики');
+    const result = await pool.query(
+      `DELETE FROM reviews r USING services s
+       WHERE r.service_id=s.id AND r.user_id=$1 AND s.code=$2
+       AND s.code LIKE 'FUR-%' AND NOT r.deleted_by_admin RETURNING r.id`,
+      [req.user.id, req.params.code]
+    );
+    if (!result.rowCount) return fail(res, 409, 'Отзыв уже удалён. Обновите список отзывов');
+    res.json({ ok: true });
   })
 );
 app.delete(
@@ -805,7 +912,7 @@ app.post(
       const finalAmount = Math.max(1, Math.round(discounted * (1 - personalDiscount / 100)));
       const order = await client.query(
         `INSERT INTO appointments(user_id,status,total,delivery_address,delivery_date)
-      VALUES($1,'Ожидает оплаты',$2,$3,$4) RETURNING id,created_at`,
+      VALUES($1,'Оплачено',$2,$3,$4) RETURNING id,created_at`,
         [req.user.id, finalAmount, address, date]
       );
       for (const item of items)
@@ -822,29 +929,27 @@ app.post(
           ]
         );
       await client.query(
-        `INSERT INTO payments(appointment_id,amount,status,provider) VALUES($1,$2,'Ожидает оплаты','Не выбран')`,
+        `INSERT INTO payments(appointment_id,amount,status,provider) VALUES($1,$2,'Оплачено','Оформление заказа')`,
         [order.rows[0].id, finalAmount]
       );
       await client.query('DELETE FROM cart_items WHERE user_id=$1', [req.user.id]);
       await client.query('COMMIT');
-      res
-        .status(201)
-        .json({
-          receipt: {
-            order_number: `FUR-${order.rows[0].id}`,
-            date: order.rows[0].created_at,
-            delivery_date: date,
-            delivery_address: address,
-            items: items.map(({ id: _id, ...rest }) => rest),
-            total_initial: totalInitial,
-            total_with_product_discounts: discounted,
-            personal_discount: personalDiscount,
-            personal_discount_amount: discounted - finalAmount,
-            total_discount: totalInitial - finalAmount,
-            final_amount: finalAmount,
-            status: 'Ожидает оплаты'
-          }
-        });
+      res.status(201).json({
+        receipt: {
+          order_number: `FUR-${order.rows[0].id}`,
+          date: order.rows[0].created_at,
+          delivery_date: date,
+          delivery_address: address,
+          items: items.map(({ id: _id, ...rest }) => rest),
+          total_initial: totalInitial,
+          total_with_product_discounts: discounted,
+          personal_discount: personalDiscount,
+          personal_discount_amount: discounted - finalAmount,
+          total_discount: totalInitial - finalAmount,
+          final_amount: finalAmount,
+          status: 'Оплачено'
+        }
+      });
     } catch (e) {
       await client.query('ROLLBACK');
       throw e;

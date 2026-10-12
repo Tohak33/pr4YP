@@ -227,6 +227,10 @@ export default function Admin() {
       </section>
       <section className="admin-section card">
         <h2>{editing ? 'Редактировать товар' : 'Добавить мебель'}</h2>
+        <p className="admin-intro">
+          Скидки: {products.filter((item) => Number(item.discount_percent) > 0).length} из{' '}
+          {products.length} товаров. Минимум — {Math.ceil(products.length * 0.3)} (30%).
+        </p>
         <form className="product-form" onSubmit={submitProduct}>
           <label>
             Код товара

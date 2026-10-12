@@ -56,7 +56,12 @@ export default function ProductCard({ product, user, onAdd, cartBusy }) {
           {showReviews ? 'Скрыть отзывы' : 'Отзывы'}
         </button>
       </div>
-      {showReviews && <Reviews code={product.code} />}
+      {showReviews && (
+        <Reviews
+          key={`${product.code}-${user?.email || 'guest'}-${user?.role || ''}`}
+          code={product.code}
+        />
+      )}
     </article>
   );
 }

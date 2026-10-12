@@ -13,6 +13,9 @@ export default function Reviews({ code }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [editing, setEditing] = useState(false);
+  const myReview = eligibility?.my_review;
   useEffect(() => {
     let active = true;
     const path = `/services/${encodeURIComponent(code)}`;
@@ -37,19 +40,61 @@ export default function Reviews({ code }) {
       active = false;
     };
   }, [code, isCustomer, user?.email]);
+  async function refreshReviews() {
+    const path = `/services/${encodeURIComponent(code)}`;
+    const [items, access] = await Promise.all([
+      api(`${path}/reviews`),
+      api(`${path}/review-eligibility`)
+    ]);
+    setReviews(items);
+    setEligibility(access);
+  }
+  function startEditing() {
+    setRating(myReview.rating);
+    setComment(myReview.comment);
+    setEditing(true);
+    setError('');
+    setMessage('');
+  }
+  function cancelEditing() {
+    setEditing(false);
+    setComment('');
+    setRating(5);
+    setError('');
+  }
   async function submit(event) {
     event.preventDefault();
     setError('');
+    setMessage('');
     if (comment.trim().length < 3) return setError('Напишите отзыв длиной минимум 3 символа');
     setSaving(true);
     try {
       await api(`/services/${encodeURIComponent(code)}/reviews`, {
-        method: 'POST',
+        method: editing ? 'PUT' : 'POST',
         body: JSON.stringify({ rating: Number(rating), comment: comment.trim() })
       });
-      setEligibility({ can_review: false, purchased: true, reviewed: true });
+      await refreshReviews();
+      setMessage(editing ? 'Отзыв изменён' : 'Отзыв добавлен');
+      setEditing(false);
       setComment('');
-      setReviews(await api(`/services/${encodeURIComponent(code)}/reviews`));
+      setRating(5);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function removeReview() {
+    setError('');
+    setMessage('');
+    setSaving(true);
+    try {
+      await api(`/services/${encodeURIComponent(code)}/reviews`, { method: 'DELETE' });
+      await refreshReviews();
+      setEditing(false);
+      setComment('');
+      setRating(5);
+      setMessage('Отзыв удалён');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -61,6 +106,7 @@ export default function Reviews({ code }) {
       <h4>Отзывы</h4>
       {loading && <p>Загрузка...</p>}
       {error && <div className="error-message">{error}</div>}
+      {message && <div className="success-message">{message}</div>}
       {!loading && !error && !reviews.length && <p>Отзывов пока нет</p>}
       {reviews.map((review, index) => (
         <div className="review" key={`${review.created_at}-${index}`}>
@@ -74,17 +120,35 @@ export default function Reviews({ code }) {
           Чтобы оставить отзыв, <Link to="/login">войдите в аккаунт</Link>.
         </p>
       )}
-      {user?.role !== 'admin' && !loading && eligibility?.purchased && eligibility.reviewed && (
-        <p>Вы уже оставили отзыв на этот товар.</p>
+      {isCustomer && !loading && myReview && !myReview.deleted_by_admin && !editing && (
+        <div>
+          <p>Вы уже оставили отзыв на этот товар.</p>
+          <div className="form-actions">
+            <button
+              className="btn-small"
+              disabled={saving || !eligibility.purchased}
+              onClick={startEditing}
+            >
+              Изменить отзыв
+            </button>
+            <button className="btn-remove" disabled={saving} onClick={removeReview}>
+              Удалить отзыв
+            </button>
+          </div>
+        </div>
+      )}
+      {isCustomer && !loading && myReview?.deleted_by_admin && (
+        <p>Ваш отзыв удалён администратором за нарушение политики.</p>
       )}
       {user?.role !== 'admin' && !loading && eligibility && !eligibility.purchased && (
         <p>Отзыв можно оставить после оплаты заказа с этим товаром.</p>
       )}
-      {eligibility?.can_review && !loading && (
+      {isCustomer && (eligibility?.can_review || editing) && !loading && (
         <form onSubmit={submit}>
+          {editing && <h4>Изменить отзыв</h4>}
           <label>
             Оценка{' '}
-            <select value={rating} onChange={(e) => setRating(e.target.value)}>
+            <select disabled={saving} value={rating} onChange={(e) => setRating(e.target.value)}>
               {[5, 4, 3, 2, 1].map((n) => (
                 <option key={n} value={n}>
                   {n}
@@ -98,11 +162,24 @@ export default function Reviews({ code }) {
             maxLength="1000"
             placeholder="Расскажите о товаре"
             value={comment}
+            disabled={saving}
             onChange={(e) => setComment(e.target.value)}
           />
-          <button className="btn-small" disabled={saving}>
-            {saving ? 'Отправка...' : 'Оставить отзыв'}
-          </button>
+          <div className="form-actions">
+            <button className="btn-small" disabled={saving}>
+              {saving ? 'Сохранение...' : editing ? 'Сохранить изменения' : 'Оставить отзыв'}
+            </button>
+            {editing && (
+              <button
+                type="button"
+                className="review-toggle"
+                disabled={saving}
+                onClick={cancelEditing}
+              >
+                Отмена
+              </button>
+            )}
+          </div>
         </form>
       )}
     </div>
