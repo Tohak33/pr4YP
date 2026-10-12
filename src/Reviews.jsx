@@ -78,11 +78,7 @@ export default function Reviews({ code }) {
         <p>Вы уже оставили отзыв на этот товар.</p>
       )}
       {user?.role !== 'admin' && !loading && eligibility && !eligibility.purchased && (
-        <p>
-          {eligibility.reviewed
-            ? 'Ваш прежний отзыв появится после оплаты заказа с этим товаром.'
-            : 'Отзыв можно оставить после оплаты заказа с этим товаром.'}
-        </p>
+        <p>Отзыв можно оставить после оплаты заказа с этим товаром.</p>
       )}
       {eligibility?.can_review && !loading && (
         <form onSubmit={submit}>
